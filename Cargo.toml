@@ -1,0 +1,25 @@
+[package]
+name = "stargate"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.75"
+async-trait = "0.1.73"
+cfg-if = "1.0.0"
+clap = { version = "4.4.4", features = ["derive"] }
+console-subscriber = "0.1.10"
+futures = "0.3.28"
+nix = {version="0.27.1", features=["net", "socket"]}
+serde = { version = "1.0.188", features = ["derive"] }
+serde_json = "1.0.107"
+tokio = { version = "1.21.2", features = ["fs", "rt", "rt-multi-thread", "net", "macros", "sync", "signal", "io-std", "io-util"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+netlink-packet-route = "0.17.0"
+## waiting on PR: https://github.com/rust-netlink/rtnetlink/pull/43
+rtnetlink = { git="https://github.com/richardstephens/rtnetlink", rev = "8109cf32aa50bfb8790da80f34bcd508676cd5e5"}
+iptables = "0.5.1"
+
