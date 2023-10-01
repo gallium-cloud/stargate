@@ -23,6 +23,11 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args: Args = Args::parse();
+    tracing_subscriber::fmt::init();
+    tracing::info!(
+        "Starting Gallium Service Gateway with config file: {}",
+        args.config
+    );
 
     let config_path = PathBuf::from(&args.config);
     let config_provider = FileConfigProvider { config_path };
