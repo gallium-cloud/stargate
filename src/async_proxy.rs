@@ -15,12 +15,12 @@ async fn pipe(mut rx: OwnedReadHalf, mut tx: OwnedWriteHalf) {
                     break;
                 }
                 if let Err(e) = tx.write(&buffer[..n]).await {
-                    eprintln!("Error writing buffer to other stream: {:?}", e);
+                    tracing::info!("Error writing buffer to other stream: {:?}", e);
                     break;
                 }
             }
             Err(e) => {
-                eprintln!("Error reading from stream: {:?}", e);
+                tracing::info!("Error reading from stream: {:?}", e);
                 break;
             }
         };
@@ -53,7 +53,7 @@ pub async fn start_proxy(
     target_addr: SocketAddr,
     transparent: bool,
 ) -> anyhow::Result<()> {
-    eprintln!(
+    tracing::info!(
         "staring proxy on port {local_port} to {}:{}",
         target_addr.ip().to_string(),
         target_addr.port()
@@ -66,12 +66,12 @@ pub async fn start_proxy(
                         tokio::spawn(proxy_connection(stream, target_addr, transparent));
                     }
                     Err(e) => {
-                        eprintln!("Error proxying connection: {:?}", e);
+                        tracing::info!("Error proxying connection: {:?}", e);
                     }
                 };
             },
             Err(e) => {
-                eprintln!("failed to bind: {:?}", e);
+                tracing::info!("failed to bind: {:?}", e);
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
         }

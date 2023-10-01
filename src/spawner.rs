@@ -28,7 +28,7 @@ pub async fn start(config_provider: impl ConfigProvider) {
                 if !proxies.contains_key(&mapping.local_port) {
                     if let Ok(target) = mapping.target_address.parse::<SocketAddrV4>() {
                         if config.transparent && config.manage_iptables {
-                            iptables_setup::add_iptables_return_rule(&target).await.ok();
+                            iptables_setup::add_iptables_return_rule(target).await.ok();
                         }
                         let handle = tokio::spawn(async_proxy::start_proxy(
                             mapping.local_port.clone(),
@@ -42,9 +42,9 @@ pub async fn start(config_provider: impl ConfigProvider) {
         }
         for port in to_delete {
             if let Some(instance) = proxies.remove(&port) {
-                eprintln!("dropping task for {port}");
+                tracing::info!("dropping task for {port}");
                 instance.handle.abort_handle().abort();
-                iptables_setup::del_iptables_return_rule(&instance.target)
+                iptables_setup::del_iptables_return_rule(instance.target)
                     .await
                     .ok();
             }
@@ -52,7 +52,7 @@ pub async fn start(config_provider: impl ConfigProvider) {
         tokio::time::sleep(Duration::from_secs(3)).await;
         if let Ok(new_config) = config_provider.read_config().await {
             if config != new_config {
-                eprintln!("new config detected");
+                tracing::info!("new config detected");
                 config = new_config;
             }
         }

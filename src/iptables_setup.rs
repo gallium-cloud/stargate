@@ -104,7 +104,7 @@ pub async fn initial_setup() -> anyhow::Result<()> {
     let lo_idx = find_loopback_intf(&handle).await?;
 
     if find_ip_rule(&handle).await? {
-        eprintln!("ip rule already exists, skipping creation");
+        tracing::info!("ip rule already exists, skipping creation");
     } else {
         handle
             .rule()
@@ -116,7 +116,7 @@ pub async fn initial_setup() -> anyhow::Result<()> {
             .execute()
             .await?;
         if find_ip_rule(&handle).await? {
-            eprintln!("Rule added successfully");
+            tracing::info!("Rule added successfully");
         } else {
             bail!("Rule not found after successful add");
         }
@@ -137,7 +137,7 @@ pub async fn initial_setup() -> anyhow::Result<()> {
             .execute()
             .await?;
         if find_ip_route(&handle).await? {
-            eprintln!("Route added successfully");
+            tracing::info!("Route added successfully");
         } else {
             bail!("Route not found after successful add")
         }
@@ -152,37 +152,48 @@ const TABLE_MANGLE: &str = "mangle";
 const CHAIN_PREROUTING: &str = "PREROUTING";
 
 #[cfg(target_os = "linux")]
-fn gen_rule_str(target: &SocketAddrV4) -> String {
+fn gen_rule_str(target: SocketAddrV4) -> String {
     let target_ip = target.ip().to_string();
     let target_port = target.port();
     format!("-p tcp -s {target_ip}/32 --sport {target_port} -j MARK --set-xmark 0x1/0xffffffff")
 }
 
 #[cfg(target_os = "linux")]
-pub async fn add_iptables_return_rule(target: &SocketAddrV4) -> anyhow::Result<()> {
+pub fn add_iptables_return_rule_sync(target: SocketAddrV4) -> anyhow::Result<()> {
     let rule = gen_rule_str(target);
-    println!("Creating rule '{rule}'");
+    tracing::info!("Creating rule '{rule}'");
     let ipt = iptables::new(false).map_err(|e| anyhow!("IPTables Err: {:?}", e))?;
     let add_result = ipt.append_unique(TABLE_MANGLE, CHAIN_PREROUTING, rule.as_str());
-    eprintln!("{:?}", add_result);
+    tracing::info!("{:?}", add_result);
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
-pub async fn del_iptables_return_rule(target: &SocketAddrV4) -> anyhow::Result<()> {
-    let rule = gen_rule_str(&target);
+pub async fn add_iptables_return_rule(target: SocketAddrV4) -> anyhow::Result<()> {
+    tokio::task::spawn_blocking(move || add_iptables_return_rule_sync(target)).await??;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn del_iptables_return_rule_sync(target: SocketAddrV4) -> anyhow::Result<()> {
+    let rule = gen_rule_str(target);
     let ipt = iptables::new(false).map_err(|e| anyhow!("IPTables Err: {:?}", e))?;
     let del_result = ipt.delete(TABLE_MANGLE, CHAIN_PREROUTING, rule.as_str());
-    eprintln!("{:?}", del_result);
+    tracing::info!("{:?}", del_result);
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+pub async fn del_iptables_return_rule(target: SocketAddrV4) -> anyhow::Result<()> {
+    tokio::task::spawn_blocking(move || del_iptables_return_rule_sync(target)).await??;
     Ok(())
 }
 
 #[cfg(not(target_os = "linux"))]
-pub async fn del_iptables_return_rule(_target: &SocketAddrV4) -> anyhow::Result<()> {
+pub async fn del_iptables_return_rule(_target: SocketAddrV4) -> anyhow::Result<()> {
     unimplemented!()
 }
 #[cfg(not(target_os = "linux"))]
-pub async fn add_iptables_return_rule(_target: &SocketAddrV4) -> anyhow::Result<()> {
+pub async fn add_iptables_return_rule(_target: SocketAddrV4) -> anyhow::Result<()> {
     unimplemented!()
 }
 #[cfg(not(target_os = "linux"))]
