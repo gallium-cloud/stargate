@@ -52,6 +52,7 @@ pub async fn start_proxy(
     local_port: u16,
     target_addr: SocketAddr,
     transparent: bool,
+    cancel: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<()> {
     tracing::info!(
         "staring proxy on port {local_port} to {}:{}",
@@ -59,16 +60,30 @@ pub async fn start_proxy(
         target_addr.port()
     );
     loop {
+        let mut connections = tokio::task::JoinSet::new();
         match TcpListener::bind(format!("0.0.0.0:{local_port}")).await {
             Ok(listener) => loop {
-                match listener.accept().await {
-                    Ok((stream, _remote_addr)) => {
-                        tokio::spawn(proxy_connection(stream, target_addr, transparent));
-                    }
-                    Err(e) => {
-                        tracing::info!("Error proxying connection: {:?}", e);
-                    }
-                };
+                tokio::select!(
+                    _ = cancel.cancelled() => {
+                        // after being cancelled, wait until the current set of connections
+                        // finished up before returning (note that on this branch, we no longer
+                        // accept() new connections!
+                        while !connections.is_empty() {
+                            connections.join_next().await;
+                        }
+                        return Ok(());
+                    },
+                    accept_result = listener.accept() => {
+                        match accept_result {
+                            Ok((stream, _remote_addr)) => {
+                                connections.spawn(proxy_connection(stream, target_addr, transparent));
+                            }
+                            Err(e) => {
+                                tracing::info!("Error proxying connection: {:?}", e);
+                            }
+                        }
+                    },
+                );
             },
             Err(e) => {
                 tracing::info!("failed to bind: {:?}", e);
