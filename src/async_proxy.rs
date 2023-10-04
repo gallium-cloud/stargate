@@ -83,6 +83,7 @@ pub async fn start_proxy(
                             }
                         }
                     },
+                    Some(_) = connections.join_next() => (),
                 );
             },
             Err(e) => {
