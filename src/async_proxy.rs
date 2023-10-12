@@ -47,8 +47,10 @@ async fn proxy_connection(client: TcpStream, mapping: IntMapping) -> anyhow::Res
     let (in_rx, in_tx) = client.into_split();
     let (out_rx, out_tx) = upstream.into_split();
 
-    tokio::spawn(pipe(in_rx, out_tx));
-    tokio::spawn(pipe(out_rx, in_tx));
+    tokio::select! {
+        _ = tokio::spawn(pipe(in_rx, out_tx)) => (),
+        _ = tokio::spawn(pipe(out_rx, in_tx)) => (),
+    }
 
     Ok(())
 }
