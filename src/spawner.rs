@@ -9,6 +9,8 @@ use tokio::task::JoinHandle;
 struct RunningProxy {
     handle: JoinHandle<anyhow::Result<()>>,
     target: SocketAddrV4,
+    managed: bool,
+    cancel: tokio_util::sync::CancellationToken,
 }
 pub async fn start(config_provider: impl ConfigProvider) {
     let mut config = config_provider.read_config().await.unwrap();
@@ -30,12 +32,22 @@ pub async fn start(config_provider: impl ConfigProvider) {
                         if config.transparent && config.manage_iptables {
                             iptables_setup::add_iptables_return_rule(target).await.ok();
                         }
+                        let cancel = tokio_util::sync::CancellationToken::new();
                         let handle = tokio::spawn(async_proxy::start_proxy(
-                            mapping.local_port.clone(),
-                            target.clone().into(),
+                            mapping.local_port,
+                            target.into(),
                             config.transparent,
+                            cancel.clone(),
                         ));
-                        proxies.insert(mapping.local_port.clone(), RunningProxy { handle, target });
+                        proxies.insert(
+                            mapping.local_port,
+                            RunningProxy {
+                                handle,
+                                target,
+                                managed: config.transparent && config.manage_iptables,
+                                cancel,
+                            },
+                        );
                     }
                 }
             }
@@ -43,11 +55,17 @@ pub async fn start(config_provider: impl ConfigProvider) {
         for port in to_delete {
             if let Some(instance) = proxies.remove(&port) {
                 tracing::info!("dropping task for {port}");
-                instance.handle.abort_handle().abort();
-                iptables_setup::del_iptables_return_rule(instance.target)
-                    .await
-                    .ok();
+                instance.cancel.cancel();
+                let _ = instance.handle.await.unwrap();
+                if instance.managed {
+                    iptables_setup::del_iptables_return_rule(instance.target)
+                        .await
+                        .ok();
+                }
             }
+        }
+        if config.should_exit && proxies.is_empty() {
+            return;
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
         if let Ok(new_config) = config_provider.read_config().await {
@@ -56,5 +74,137 @@ pub async fn start(config_provider: impl ConfigProvider) {
                 config = new_config;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    pub struct TestTrivialConfigProvider {
+        local_port: u16,
+        target_address: String,
+        should_exit: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[async_trait::async_trait]
+    impl ConfigProvider for TestTrivialConfigProvider {
+        async fn read_config(&self) -> anyhow::Result<crate::config::Config> {
+            Ok(crate::config::Config {
+                mappings: vec![crate::config::Mapping {
+                    local_port: self.local_port,
+                    target_address: self.target_address.clone(),
+                }],
+                transparent: false,
+                manage_iptables: false,
+                should_exit: self.should_exit.load(std::sync::atomic::Ordering::Relaxed),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn smoke() {
+        let target_port = portpicker::pick_unused_port().unwrap();
+        let target = tokio::spawn(async move {
+            let socket = tokio::net::TcpListener::bind(format!("127.0.0.1:{target_port}"))
+                .await
+                .unwrap();
+            while let Ok((stream, _)) = socket.accept().await {
+                let (stream_in, mut stream_out) = stream.into_split();
+                let mut stream_in = tokio::io::BufReader::new(stream_in);
+                let mut line = String::new();
+                while let Ok(n) = stream_in.read_line(&mut line).await {
+                    if n == 0 {
+                        break;
+                    }
+                    stream_out.write_all(line.as_bytes()).await.unwrap();
+                    line = String::new();
+                }
+            }
+        });
+
+        let _ = wait_for_them::wait_for_them(
+            &[wait_for_them::ToCheck::HostnameAndPort(
+                "127.0.0.1".to_string(),
+                target_port,
+            )],
+            Some(1000),
+            None,
+            true,
+        )
+        .await
+        .iter()
+        .map(|o| o.expect("target unreachable"))
+        .collect::<Vec<_>>();
+
+        let local_port = portpicker::pick_unused_port().unwrap();
+        let should_exit: std::sync::Arc<std::sync::atomic::AtomicBool> =
+            std::sync::Arc::new(false.into());
+        let config = TestTrivialConfigProvider {
+            local_port: local_port,
+            target_address: format!("127.0.0.1:{target_port}"),
+            should_exit: should_exit.clone(),
+        };
+        let proxy = tokio::spawn(async move { start(config).await });
+
+        let _ = wait_for_them::wait_for_them(
+            &[wait_for_them::ToCheck::HostnameAndPort(
+                "127.0.0.1".to_string(),
+                local_port,
+            )],
+            Some(1000),
+            None,
+            true,
+        )
+        .await
+        .iter()
+        .map(|o| o.expect("proxy unreachable"))
+        .collect::<Vec<_>>();
+
+        // echo through the proxy
+        let (stream_in, mut stream_out) =
+            tokio::net::TcpStream::connect(format!("127.0.0.1:{local_port}"))
+                .await
+                .unwrap()
+                .into_split();
+        let mut stream_in = tokio::io::BufReader::new(stream_in);
+        stream_out.write_all(b"boop\n").await.unwrap();
+        let mut line = String::new();
+        stream_in.read_line(&mut line).await.unwrap();
+        assert!(&line == "boop\n");
+
+        // tell the spawner to exit
+        should_exit.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        // wait for the spawner to stop accepting *new* connections
+        loop {
+            if tokio::net::TcpStream::connect(format!("127.0.0.1:{local_port}"))
+                .await
+                .is_err()
+            {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+
+        // verify that we can still echo through the already-opened connection
+        stream_out.write_all(b"boopboop\n").await.unwrap();
+        let mut line = String::new();
+        stream_in.read_line(&mut line).await.unwrap();
+        assert!(&line == "boopboop\n");
+
+        // close the connection
+        target.abort_handle().abort();
+        let _ = target.await;
+
+        // verify the spawner has exited
+        tokio::select!(
+            _ = proxy => (),
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(5000)) => {
+                assert!(false, "proxy didn't exit!");
+            },
+        );
     }
 }

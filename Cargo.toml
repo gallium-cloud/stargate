@@ -14,7 +14,8 @@ futures = "0.3.28"
 nix = {version="0.27.1", features=["net", "socket"]}
 serde = { version = "1.0.188", features = ["derive"] }
 serde_json = "1.0.107"
-tokio = { version = "1.21.2", features = ["fs", "rt", "rt-multi-thread", "net", "macros", "sync", "signal", "io-std", "io-util"] }
+tokio = { version = "1.21.2", features = ["fs", "rt", "rt-multi-thread", "net", "macros", "sync", "signal", "time", "io-std", "io-util"] }
+tokio-util = { version = "0.7.9" }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
 
@@ -24,3 +25,6 @@ netlink-packet-route = "0.17.0"
 rtnetlink = { git="https://github.com/richardstephens/rtnetlink", rev = "8109cf32aa50bfb8790da80f34bcd508676cd5e5"}
 iptables = "0.5.1"
 
+[dev-dependencies]
+portpicker = { version = "0.1.1" }
+wait-for-them = { version = "0.4.0" }
