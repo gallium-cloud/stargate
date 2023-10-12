@@ -13,6 +13,7 @@ struct RunningProxy {
     cancel: tokio_util::sync::CancellationToken,
 }
 pub async fn start(config_provider: impl ConfigProvider) {
+    let mut termination_tasks = tokio::task::JoinSet::new();
     let (mut config, mut int_mappings) = config_provider.read_config().await.unwrap();
 
     if config.transparent && config.manage_iptables {
@@ -54,7 +55,7 @@ pub async fn start(config_provider: impl ConfigProvider) {
         for port in to_delete {
             if let Some(instance) = proxies.remove(&port) {
                 tracing::info!("dropping task for {port}");
-                tokio::spawn(async move {
+                termination_tasks.spawn(async move {
                     instance.cancel.cancel();
                     let _ = instance.handle.await.unwrap();
                     if instance.managed {
@@ -66,6 +67,9 @@ pub async fn start(config_provider: impl ConfigProvider) {
             }
         }
         if config.should_exit && proxies.is_empty() {
+            while !termination_tasks.is_empty() {
+                termination_tasks.join_next().await;
+            }
             return;
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
