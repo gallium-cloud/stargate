@@ -72,9 +72,9 @@ pub async fn start_proxy(
             Ok(listener) => loop {
                 tokio::select!(
                     _ = cancel.cancelled() => {
-                        // after being cancelled, wait until the current set of connections
-                        // finished up before returning (note that on this branch, we no longer
-                        // accept() new connections!
+                        drop(listener);
+                        // after being cancelled & dropping the listener, wait until the
+                        // current set of connections finish up before returning.
                         while !connections.is_empty() {
                             connections.join_next().await;
                         }
