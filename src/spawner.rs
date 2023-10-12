@@ -54,13 +54,15 @@ pub async fn start(config_provider: impl ConfigProvider) {
         for port in to_delete {
             if let Some(instance) = proxies.remove(&port) {
                 tracing::info!("dropping task for {port}");
-                instance.cancel.cancel();
-                let _ = instance.handle.await.unwrap();
-                if instance.managed {
-                    iptables_setup::del_iptables_return_rule(instance.target)
-                        .await
-                        .ok();
-                }
+                tokio::spawn(async move {
+                    instance.cancel.cancel();
+                    let _ = instance.handle.await.unwrap();
+                    if instance.managed {
+                        iptables_setup::del_iptables_return_rule(instance.target)
+                            .await
+                            .ok();
+                    }
+                });
             }
         }
         if config.should_exit && proxies.is_empty() {
