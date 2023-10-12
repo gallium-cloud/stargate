@@ -47,8 +47,10 @@ async fn proxy_connection(client: TcpStream, mapping: IntMapping) -> anyhow::Res
     let (in_rx, in_tx) = client.into_split();
     let (out_rx, out_tx) = upstream.into_split();
 
-    tokio::spawn(pipe(in_rx, out_tx));
-    tokio::spawn(pipe(out_rx, in_tx));
+    tokio::select! {
+        _ = tokio::spawn(pipe(in_rx, out_tx)) => (),
+        _ = tokio::spawn(pipe(out_rx, in_tx)) => (),
+    }
 
     Ok(())
 }
@@ -70,9 +72,9 @@ pub async fn start_proxy(
             Ok(listener) => loop {
                 tokio::select!(
                     _ = cancel.cancelled() => {
-                        // after being cancelled, wait until the current set of connections
-                        // finished up before returning (note that on this branch, we no longer
-                        // accept() new connections!
+                        drop(listener);
+                        // after being cancelled & dropping the listener, wait until the
+                        // current set of connections finish up before returning.
                         while !connections.is_empty() {
                             connections.join_next().await;
                         }
