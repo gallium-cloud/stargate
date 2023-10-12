@@ -7,14 +7,14 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 
 async fn pipe(mut rx: OwnedReadHalf, mut tx: OwnedWriteHalf) {
-    let mut buffer = [0; 4096];
+    let mut buffer = [0; 16384];
     loop {
         match rx.read(&mut buffer).await {
             Ok(n) => {
                 if n == 0 {
                     break;
                 }
-                if let Err(e) = tx.write(&buffer[..n]).await {
+                if let Err(e) = tx.write_all(&buffer[..n]).await {
                     tracing::info!("Error writing buffer to other stream: {:?}", e);
                     break;
                 }
