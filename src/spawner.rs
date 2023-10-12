@@ -13,7 +13,7 @@ struct RunningProxy {
     cancel: tokio_util::sync::CancellationToken,
 }
 pub async fn start(config_provider: impl ConfigProvider) {
-    let mut config = config_provider.read_config().await.unwrap();
+    let (mut config, mut int_mappings) = config_provider.read_config().await.unwrap();
 
     if config.transparent && config.manage_iptables {
         iptables_setup::initial_setup().await.unwrap();
@@ -25,30 +25,29 @@ pub async fn start(config_provider: impl ConfigProvider) {
         let mut to_delete: HashSet<u16> = HashSet::from_iter(proxies.keys().cloned());
 
         if !config.should_exit {
-            for mapping in &config.mappings {
+            for mapping in &int_mappings {
                 to_delete.remove(&mapping.local_port);
                 if !proxies.contains_key(&mapping.local_port) {
-                    if let Ok(target) = mapping.target_address.parse::<SocketAddrV4>() {
-                        if config.transparent && config.manage_iptables {
-                            iptables_setup::add_iptables_return_rule(target).await.ok();
-                        }
-                        let cancel = tokio_util::sync::CancellationToken::new();
-                        let handle = tokio::spawn(async_proxy::start_proxy(
-                            mapping.local_port,
-                            target.into(),
-                            config.transparent,
-                            cancel.clone(),
-                        ));
-                        proxies.insert(
-                            mapping.local_port,
-                            RunningProxy {
-                                handle,
-                                target,
-                                managed: config.transparent && config.manage_iptables,
-                                cancel,
-                            },
-                        );
+                    if config.transparent && config.manage_iptables {
+                        iptables_setup::add_iptables_return_rule(mapping.target_address)
+                            .await
+                            .ok();
                     }
+                    let cancel = tokio_util::sync::CancellationToken::new();
+                    let handle = tokio::spawn(async_proxy::start_proxy(
+                        mapping.local_port,
+                        mapping.clone(),
+                        cancel.clone(),
+                    ));
+                    proxies.insert(
+                        mapping.local_port,
+                        RunningProxy {
+                            handle,
+                            target: mapping.target_address,
+                            managed: config.transparent && config.manage_iptables,
+                            cancel,
+                        },
+                    );
                 }
             }
         }
@@ -68,10 +67,11 @@ pub async fn start(config_provider: impl ConfigProvider) {
             return;
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
-        if let Ok(new_config) = config_provider.read_config().await {
+        if let Ok((new_config, new_mappings)) = config_provider.read_config().await {
             if config != new_config {
                 tracing::info!("new config detected");
                 config = new_config;
+                int_mappings = new_mappings;
             }
         }
     }
@@ -91,16 +91,21 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ConfigProvider for TestTrivialConfigProvider {
-        async fn read_config(&self) -> anyhow::Result<crate::config::Config> {
-            Ok(crate::config::Config {
+        async fn read_config(
+            &self,
+        ) -> anyhow::Result<(crate::config::Config, Vec<crate::config::IntMapping>)> {
+            let config = crate::config::Config {
                 mappings: vec![crate::config::Mapping {
                     local_port: self.local_port,
                     target_address: self.target_address.clone(),
+                    hairpin_net: None,
                 }],
                 transparent: false,
                 manage_iptables: false,
                 should_exit: self.should_exit.load(std::sync::atomic::Ordering::Relaxed),
-            })
+            };
+            let int_mappings = config.to_int_mappings()?;
+            Ok((config, int_mappings))
         }
     }
 

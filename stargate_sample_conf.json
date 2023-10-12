@@ -1,0 +1,12 @@
+{
+  "transparent": true,
+  "manage_iptables": true,
+  "should_exit": false,
+  "mappings": [
+    {
+      "local_port": 2001,
+      "target_address": "172.27.91.231:80",
+      "hairpin_net": "172.27.91.0/24"
+    }
+  ]
+}

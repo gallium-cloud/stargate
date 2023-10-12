@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use crate::config::IntMapping;
 use crate::tcp_from_src;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -27,16 +28,20 @@ async fn pipe(mut rx: OwnedReadHalf, mut tx: OwnedWriteHalf) {
     }
 }
 
-async fn proxy_connection(
-    client: TcpStream,
-    target: SocketAddr,
-    transparent: bool,
-) -> anyhow::Result<()> {
-    let upstream = match (client.peer_addr(), target, transparent) {
-        (Ok(SocketAddr::V4(client_v4)), SocketAddr::V4(target_v4), true) => {
-            tcp_from_src::tcpstream_connect_from_addr(client_v4, target_v4).await
+async fn proxy_connection(client: TcpStream, mapping: IntMapping) -> anyhow::Result<()> {
+    let upstream = match (
+        client.peer_addr(),
+        mapping.target_address,
+        mapping.transparent,
+    ) {
+        (Ok(SocketAddr::V4(client_v4)), target_v4, true) => {
+            if mapping.connection_is_hairpin(client_v4.ip()) {
+                Ok(tokio::net::TcpStream::connect(target_v4).await?)
+            } else {
+                tcp_from_src::tcpstream_connect_from_addr(client_v4, target_v4).await
+            }
         }
-        _ => Ok(tokio::net::TcpStream::connect(target).await?),
+        _ => Ok(tokio::net::TcpStream::connect(SocketAddr::V4(mapping.target_address)).await?),
     }?;
 
     let (in_rx, in_tx) = client.into_split();
@@ -50,14 +55,14 @@ async fn proxy_connection(
 
 pub async fn start_proxy(
     local_port: u16,
-    target_addr: SocketAddr,
-    transparent: bool,
+    mapping: IntMapping,
     cancel: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<()> {
     tracing::info!(
-        "staring proxy on port {local_port} to {}:{}",
-        target_addr.ip().to_string(),
-        target_addr.port()
+        "staring proxy on port {local_port} to {}:{}. Hairpin net: {:?}",
+        mapping.target_address.ip().to_string(),
+        mapping.target_address.port(),
+        mapping.hairpin_net,
     );
     loop {
         let mut connections = tokio::task::JoinSet::new();
@@ -76,7 +81,7 @@ pub async fn start_proxy(
                     accept_result = listener.accept() => {
                         match accept_result {
                             Ok((stream, _remote_addr)) => {
-                                connections.spawn(proxy_connection(stream, target_addr, transparent));
+                                connections.spawn(proxy_connection(stream, mapping));
                             }
                             Err(e) => {
                                 tracing::info!("Error proxying connection: {:?}", e);
