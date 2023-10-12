@@ -56,19 +56,20 @@ async fn proxy_connection(client: TcpStream, mapping: IntMapping) -> anyhow::Res
 }
 
 pub async fn start_proxy(
-    local_port: u16,
     mapping: IntMapping,
     cancel: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<()> {
     tracing::info!(
-        "staring proxy on port {local_port} to {}:{}. Hairpin net: {:?}",
+        "staring proxy on addrs {}:{} to {}:{}. Hairpin net: {:?}",
+        mapping.local_bind.ip(),
+        mapping.local_bind.port(),
         mapping.target_address.ip().to_string(),
         mapping.target_address.port(),
         mapping.hairpin_net,
     );
     loop {
         let mut connections = tokio::task::JoinSet::new();
-        match TcpListener::bind(format!("0.0.0.0:{local_port}")).await {
+        match TcpListener::bind(mapping.local_bind).await {
             Ok(listener) => loop {
                 tokio::select!(
                     _ = cancel.cancelled() => {
