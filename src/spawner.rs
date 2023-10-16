@@ -20,28 +20,25 @@ pub async fn start(config_provider: impl ConfigProvider) {
         iptables_setup::initial_setup().await.unwrap();
     }
 
-    let mut proxies = HashMap::new();
+    let mut proxies: HashMap<SocketAddrV4, RunningProxy> = HashMap::new();
 
     loop {
-        let mut to_delete: HashSet<u16> = HashSet::from_iter(proxies.keys().cloned());
+        let mut to_delete: HashSet<SocketAddrV4> = HashSet::from_iter(proxies.keys().cloned());
 
         if !config.should_exit {
             for mapping in &int_mappings {
-                to_delete.remove(&mapping.local_port);
-                if !proxies.contains_key(&mapping.local_port) {
+                to_delete.remove(&mapping.local_bind);
+                if !proxies.contains_key(&mapping.local_bind) {
                     if config.transparent && config.manage_iptables {
                         iptables_setup::add_iptables_return_rule(mapping.target_address)
                             .await
                             .ok();
                     }
                     let cancel = tokio_util::sync::CancellationToken::new();
-                    let handle = tokio::spawn(async_proxy::start_proxy(
-                        mapping.local_port,
-                        mapping.clone(),
-                        cancel.clone(),
-                    ));
+                    let handle =
+                        tokio::spawn(async_proxy::start_proxy(mapping.clone(), cancel.clone()));
                     proxies.insert(
-                        mapping.local_port,
+                        mapping.local_bind,
                         RunningProxy {
                             handle,
                             target: mapping.target_address,
@@ -100,6 +97,12 @@ mod tests {
         async fn read_config(
             &self,
         ) -> anyhow::Result<(crate::config::Config, Vec<crate::config::IntMapping>)> {
+            let bind_addrs = crate::bind_addr::get_bind_addresses(true)
+                .await
+                .unwrap()
+                .iter()
+                .map(|a| a.to_string())
+                .collect();
             let config = crate::config::Config {
                 mappings: vec![crate::config::Mapping {
                     local_port: self.local_port,
@@ -109,6 +112,7 @@ mod tests {
                 transparent: false,
                 manage_iptables: false,
                 should_exit: self.should_exit.load(std::sync::atomic::Ordering::Relaxed),
+                bind_addrs,
             };
             let int_mappings = config.to_int_mappings()?;
             Ok((config, int_mappings))
@@ -154,10 +158,11 @@ mod tests {
         let should_exit: std::sync::Arc<std::sync::atomic::AtomicBool> =
             std::sync::Arc::new(false.into());
         let config = TestTrivialConfigProvider {
-            local_port: local_port,
+            local_port,
             target_address: format!("127.0.0.1:{target_port}"),
             should_exit: should_exit.clone(),
         };
+
         let proxy = tokio::spawn(async move { start(config).await });
 
         let _ = wait_for_them::wait_for_them(
