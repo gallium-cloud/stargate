@@ -2,10 +2,10 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use crate::config::IntMapping;
-use crate::tcp_from_src;
+use crate::tcp_helper;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 
 async fn pipe(mut rx: OwnedReadHalf, mut tx: OwnedWriteHalf) {
     let mut buffer = [0; 16384];
@@ -38,7 +38,7 @@ async fn proxy_connection(client: TcpStream, mapping: IntMapping) -> anyhow::Res
             if mapping.connection_is_hairpin(client_v4.ip()) {
                 Ok(tokio::net::TcpStream::connect(target_v4).await?)
             } else {
-                tcp_from_src::tcpstream_connect_from_addr(client_v4, target_v4).await
+                tcp_helper::tcpstream_connect_from_addr(client_v4, target_v4).await
             }
         }
         _ => Ok(tokio::net::TcpStream::connect(SocketAddr::V4(mapping.target_address)).await?),
@@ -69,7 +69,7 @@ pub async fn start_proxy(
     );
     loop {
         let mut connections = tokio::task::JoinSet::new();
-        match TcpListener::bind(mapping.local_bind).await {
+        match tcp_helper::bind_reuseport(mapping.local_bind).await {
             Ok(listener) => loop {
                 tokio::select!(
                     _ = cancel.cancelled() => {

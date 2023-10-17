@@ -1,5 +1,8 @@
+use socket2::{Domain, Socket, Type};
 use std::net::SocketAddrV4;
+use std::net::TcpListener;
 use tokio::net::TcpStream;
+use tracing::info;
 
 cfg_if! {
     if #[cfg(target_os = "linux")] {
@@ -51,4 +54,15 @@ pub async fn tcpstream_connect_from_addr(
     _target_addr: SocketAddrV4,
 ) -> anyhow::Result<TcpStream> {
     unimplemented!()
+}
+
+pub async fn bind_reuseport(bind_addr: SocketAddrV4) -> anyhow::Result<tokio::net::TcpListener> {
+    let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
+    let address = bind_addr.into();
+    socket.set_reuse_port(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&address)?;
+    socket.listen(128)?;
+    let std_listener: TcpListener = socket.into();
+    Ok(tokio::net::TcpListener::from_std(std_listener)?)
 }
